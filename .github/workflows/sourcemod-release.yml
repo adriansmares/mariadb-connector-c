@@ -19,10 +19,10 @@ jobs:
         include:
           - arch: x86
             cmake_flags: -DCMAKE_C_FLAGS=-m32 -DCMAKE_EXE_LINKER_FLAGS=-m32
-            packages: gcc-multilib libc6-dev-i386 libssl-dev:i386 zlib1g-dev:i386
+            packages: cmake ninja-build gcc-multilib libc6-dev-i386 libssl-dev:i386 zlib1g-dev:i386
           - arch: x86_64
             cmake_flags: ''
-            packages: libssl-dev zlib1g-dev
+            packages: cmake ninja-build libssl-dev zlib1g-dev
     steps:
       - uses: actions/checkout@v6
 
@@ -45,7 +45,7 @@ jobs:
           package="mariadb-connector-c-${version}-${{ matrix.arch }}"
           archive="mariadb-connector-c-${version}-linux-${{ matrix.arch }}.tar.gz"
 
-          cmake -S . -B build \
+          cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang-22 \
             -DCMAKE_CXX_COMPILER=clang++-22 \
@@ -82,9 +82,9 @@ jobs:
       matrix:
         include:
           - arch: x86
-            generator_arch: Win32
+            dev_arch: x86
           - arch: x86_64
-            generator_arch: x64
+            dev_arch: x64
     steps:
       - uses: actions/checkout@v6
 
@@ -92,27 +92,45 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsRoot) { throw 'No Visual Studio installation with x86/x64 C++ tools was found.' }
+          $devCmd = Join-Path $vsRoot 'Common7\Tools\VsDevCmd.bat'
+          cmd /d /s /c "`"$devCmd`" -arch=${{ matrix.dev_arch }} -host_arch=x64 >nul && set" |
+            ForEach-Object {
+              if ($_ -match '^([^=]+)=(.*)$') {
+                Set-Item -Path ("Env:" + $matches[1]) -Value $matches[2]
+              }
+            }
+
           $releaseTag = '${{ github.ref_name }}'
           $version = ($releaseTag -replace '^v', '') -replace '-sm\..+$', ''
           $package = "mariadb-connector-c-$version-${{ matrix.arch }}"
           $archive = "mariadb-connector-c-$version-windows-${{ matrix.arch }}.zip"
 
-          cmake -S . -B build -G 'Visual Studio 17 2022' -A '${{ matrix.generator_arch }}' `
+          cmake -S . -B build-release -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_INSTALL_PREFIX="$PWD/stage" `
             -DINSTALL_LIBDIR=lib `
             -DWITH_UNIT_TESTS=OFF `
             -DWITH_CURL=OFF `
             -DWITH_SSL=SCHANNEL `
             -DCLIENT_PLUGIN_CACHING_SHA2_PASSWORD=STATIC
-          cmake --build build --config Release --parallel --target mariadbclient
-          cmake --install build --config Release --component Development
+          cmake --build build-release --parallel --target mariadbclient
+          cmake --install build-release --component Development
           New-Item -ItemType Directory -Force -Path "$package/lib/debug" | Out-Null
           Copy-Item stage/include "$package/include" -Recurse
           Copy-Item stage/lib/mariadbclient.lib "$package/lib/mariadbclient.lib"
 
-          cmake --build build --config Debug --parallel --target mariadbclient
-          $debugLibrary = Get-ChildItem -Recurse -Filter mariadbclient.lib -LiteralPath build |
-            Where-Object { $_.Directory.Name -eq 'Debug' } |
+          cmake -S . -B build-debug -G Ninja `
+            -DCMAKE_BUILD_TYPE=Debug `
+            -DINSTALL_LIBDIR=lib `
+            -DWITH_UNIT_TESTS=OFF `
+            -DWITH_CURL=OFF `
+            -DWITH_SSL=SCHANNEL `
+            -DCLIENT_PLUGIN_CACHING_SHA2_PASSWORD=STATIC
+          cmake --build build-debug --parallel --target mariadbclient
+          $debugLibrary = Get-ChildItem -Recurse -Filter mariadbclient.lib -LiteralPath build-debug |
             Select-Object -First 1
           if ($null -eq $debugLibrary) { throw 'Debug static library was not built.' }
           Copy-Item $debugLibrary.FullName "$package/lib/debug/mariadbclient.lib"
@@ -130,53 +148,10 @@ jobs:
           path: release/*
           if-no-files-found: error
 
-  macos:
-    name: macOS x86_64
-    runs-on: macos-13
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build and package
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_tag='${{ github.ref_name }}'
-          version=${release_tag#v}
-          version=${version%-sm.*}
-          package="mariadb-connector-c-${version}-x86_64"
-          archive="mariadb-connector-c-${version}-macos-x86_64.tar.gz"
-          openssl_root=$(brew --prefix openssl@3)
-
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PWD/stage" \
-            -DINSTALL_LIBDIR=lib \
-            -DWITH_UNIT_TESTS=OFF \
-            -DWITH_CURL=OFF \
-            -DWITH_SSL=OPENSSL \
-            -DOPENSSL_ROOT_DIR="$openssl_root" \
-            -DCLIENT_PLUGIN_CACHING_SHA2_PASSWORD=STATIC
-          cmake --build build --parallel --target mariadbclient
-          cmake --install build --component Development
-
-          test -f stage/lib/libmariadbclient.a
-          test -f stage/include/mariadb/mysql.h
-          mv stage "$package"
-          tar -czf "$archive" "$package"
-          tar -tzf "$archive" | grep -Fx "$package/lib/libmariadbclient.a"
-          mkdir release
-          mv "$archive" release/
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: sourcemod-macos-x86_64
-          path: release/*
-          if-no-files-found: error
-
   release:
     name: Publish release
     if: github.ref_type == 'tag'
-    needs: [linux, windows, macos]
+    needs: [linux, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -191,7 +166,7 @@ jobs:
           set -euo pipefail
           cd release
           sha256sum *.tar.gz *.zip > SHA256SUMS
-          test $(wc -l < SHA256SUMS) -eq 5
+          test $(wc -l < SHA256SUMS) -eq 4
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
