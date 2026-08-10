@@ -50,6 +50,7 @@ jobs:
             -DCMAKE_C_COMPILER=clang-22 \
             -DCMAKE_CXX_COMPILER=clang++-22 \
             -DCMAKE_INSTALL_PREFIX="$PWD/stage" \
+            -DINSTALL_LAYOUT=DEFAULT \
             -DINSTALL_LIBDIR=lib \
             -DWITH_UNIT_TESTS=OFF \
             -DWITH_CURL=OFF \
