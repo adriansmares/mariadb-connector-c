@@ -59,15 +59,14 @@ jobs:
             -DCLIENT_PLUGIN_CACHING_SHA2_PASSWORD=STATIC \
             ${{ matrix.cmake_flags }}
           cmake --build build --parallel --target mariadbclient
-          # Connector/C's Debian install script names the static library
-          # libmariadb.a even though the target is built as libmariadbclient.a.
-          # Provide that compatibility name only for installation, then normalize
-          # the packaged layout back to the SourceMod-facing filename.
-          ln -sf libmariadbclient.a build/libmariadb/libmariadb.a
-          cmake --install build --component Development
-          if [ -f stage/lib/libmariadb.a ]; then
-            mv stage/lib/libmariadb.a stage/lib/libmariadbclient.a
-          fi
+          # The Development component also installs libmariadb.so, which is not
+          # built for these static-only artifacts. Run the generated header-only
+          # install script, then copy the static target explicitly.
+          cmake -DCMAKE_INSTALL_PREFIX="$PWD/stage" \
+            -DCMAKE_INSTALL_COMPONENT=Development \
+            -P build/include/cmake_install.cmake
+          mkdir -p stage/lib
+          cp build/libmariadb/libmariadbclient.a stage/lib/
 
           test -f stage/lib/libmariadbclient.a
           test -f stage/include/mariadb/mysql.h
