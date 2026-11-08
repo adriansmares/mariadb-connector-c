@@ -12,7 +12,8 @@ jobs:
   linux:
     name: Linux ${{ matrix.arch }}
     runs-on: ubuntu-latest
-    container: ghcr.io/alliedmodders/build-containers/debian11-clang22:latest
+    # Debian 13, like our servers: links its OpenSSL 3, which the SourceMod build there links too.
+    container: ghcr.io/alliedmodders/build-containers/debian13-clang22@sha256:6f680e0c77cfd10696a8cecd14a3018bb910d046d0cbc641d89c3a3722f822c8
     strategy:
       fail-fast: false
       matrix:
